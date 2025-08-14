@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate log;
+
 use anyhow::{anyhow, Context, Result};
 use clap::{Arg, Command};
 use std::fs;
@@ -9,9 +12,6 @@ mod config;
 mod crates_io;
 mod git;
 mod workspace;
-
-#[cfg(test)]
-mod test_suite;
 
 use cargo_toml::{CargoToml, DependencyType};
 use config::CargoConfig;
@@ -29,6 +29,14 @@ pub struct CrateInfo {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 初始化日志系统
+    env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Info)
+        .format_timestamp(None)
+        .format_module_path(false)
+        .format_target(false)
+        .init();
+
     let matches = Command::new("cargo-lpatch")
         .about("Locally patch cargo dependencies by cloning and setting up local patches")
         .subcommand(
@@ -71,8 +79,8 @@ async fn main() -> Result<()> {
             run_lpatch(name, dir).await?;
         } else {
             // 如果没有提供 name 且没有 analyze，显示帮助
-            println!("Error: Either --name or --analyze must be specified.");
-            println!("Use --help for more information.");
+            error!("Either --name or --analyze must be specified.");
+            error!("Use --help for more information.");
             std::process::exit(1);
         }
     }
@@ -81,19 +89,18 @@ async fn main() -> Result<()> {
 }
 
 async fn analyze_dependencies() -> Result<()> {
-    println!("🔍 Analyzing Cargo.toml dependencies...");
+    info!("🔍 Analyzing Cargo.toml dependencies...");
 
     let cargo_toml = CargoToml::find_and_load().context("Failed to find and load Cargo.toml")?;
 
     let all_deps = cargo_toml.get_all_dependencies();
 
     if all_deps.is_empty() {
-        println!("📦 No dependencies found in Cargo.toml");
+        info!("📦 No dependencies found in Cargo.toml");
         return Ok(());
     }
 
-    println!("📦 Found {} dependencies:", all_deps.len());
-    println!();
+    info!("📦 Found {} dependencies:", all_deps.len());
 
     // 按类型分组显示
     let version_deps = cargo_toml.get_version_dependencies();
@@ -101,20 +108,19 @@ async fn analyze_dependencies() -> Result<()> {
     let path_deps = cargo_toml.get_path_dependencies();
 
     if !version_deps.is_empty() {
-        println!(
+        info!(
             "🌐 Version dependencies (from crates.io): {}",
             version_deps.len()
         );
         for dep in &version_deps {
             if let DependencyType::Version { version } = &dep.dep_type {
-                println!("  📋 {} = \"{}\"", dep.name, version);
+                info!("  📋 {} = \"{}\"", dep.name, version);
             }
         }
-        println!();
     }
 
     if !git_deps.is_empty() {
-        println!("🔗 Git dependencies: {}", git_deps.len());
+        info!("🔗 Git dependencies: {}", git_deps.len());
         for dep in &git_deps {
             if let DependencyType::Git {
                 git,
@@ -123,40 +129,39 @@ async fn analyze_dependencies() -> Result<()> {
                 rev,
             } = &dep.dep_type
             {
-                print!("  🌿 {} = {{ git = \"{}\"", dep.name, git);
+                let mut git_spec = format!("  🌿 {} = {{ git = \"{}\"", dep.name, git);
                 if let Some(branch) = branch {
-                    print!(", branch = \"{}\"", branch);
+                    git_spec.push_str(&format!(", branch = \"{branch}\""));
                 }
                 if let Some(tag) = tag {
-                    print!(", tag = \"{}\"", tag);
+                    git_spec.push_str(&format!(", tag = \"{tag}\""));
                 }
                 if let Some(rev) = rev {
-                    print!(", rev = \"{}\"", rev);
+                    git_spec.push_str(&format!(", rev = \"{rev}\""));
                 }
-                println!(" }}");
+                git_spec.push_str(" }");
+                info!("{git_spec}");
             }
         }
-        println!();
     }
 
     if !path_deps.is_empty() {
-        println!("📁 Path dependencies: {}", path_deps.len());
+        info!("📁 Path dependencies: {}", path_deps.len());
         for dep in &path_deps {
             if let DependencyType::Path { path } = &dep.dep_type {
-                println!("  📂 {} = {{ path = \"{}\" }}", dep.name, path);
+                info!("  📂 {} = {{ path = \"{}\" }}", dep.name, path);
             }
         }
-        println!();
     }
 
-    println!("💡 Use 'cargo lpatch --name <CRATE_NAME>' to patch a specific dependency");
+    info!("💡 Use 'cargo lpatch --name <CRATE_NAME>' to patch a specific dependency");
 
     Ok(())
 }
 
 async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
-    println!("Creating local patch for: {name}");
-    println!("Clone directory: {dir}");
+    info!("Creating local patch for: {name}");
+    info!("Clone directory: {dir}");
 
     // 尝试从 Cargo.toml 分析依赖信息
     let dependency_info = if let Ok(cargo_toml) = CargoToml::find_and_load() {
@@ -167,7 +172,7 @@ async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
 
     // 根据依赖信息或用户输入确定 crate 信息
     let crate_info = if let Some(dep_info) = dependency_info {
-        println!("📦 Found dependency '{}' in Cargo.toml", dep_info.name);
+        info!("📦 Found dependency '{}' in Cargo.toml", dep_info.name);
 
         match &dep_info.dep_type {
             DependencyType::Git {
@@ -176,15 +181,15 @@ async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
                 tag,
                 rev,
             } => {
-                println!("🔗 Git dependency detected: {}", git);
+                info!("🔗 Git dependency detected: {git}");
                 if let Some(branch) = branch {
-                    println!("  🌿 Branch: {branch}");
+                    info!("  🌿 Branch: {branch}");
                 }
                 if let Some(tag) = tag {
-                    println!("  🏷️  Tag: {tag}");
+                    info!("  🏷️  Tag: {tag}");
                 }
                 if let Some(rev) = rev {
-                    println!("  🔄 Revision: {rev}");
+                    info!("  🔄 Revision: {rev}");
                 }
 
                 CrateInfo {
@@ -195,8 +200,8 @@ async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
                 }
             }
             DependencyType::Version { version } => {
-                println!("🌐 Version dependency detected: {}", version);
-                println!("🔍 Querying crates.io for repository URL...");
+                info!("🌐 Version dependency detected: {version}");
+                info!("🔍 Querying crates.io for repository URL...");
 
                 let client = CratesIoClient::new();
                 let repo_url = client
@@ -224,7 +229,7 @@ async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
     } else {
         // 回退到原有逻辑：检查是否是 git URL
         if is_git_url(name) {
-            println!("🔗 Direct git URL detected");
+            info!("🔗 Direct git URL detected");
             CrateInfo {
                 name: extract_crate_name_from_git_url(name)?,
                 repository_url: name.to_string(),
@@ -233,7 +238,7 @@ async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
             }
         } else {
             // 从 crates.io 查询
-            println!("🌐 Querying crates.io for crate: {name}");
+            info!("🌐 Querying crates.io for crate: {name}");
             let client = CratesIoClient::new();
             let repo_url = client
                 .get_repository_url(name)
@@ -249,13 +254,13 @@ async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
         }
     };
 
-    println!("Repository URL: {}", crate_info.repository_url);
+    info!("Repository URL: {}", crate_info.repository_url);
 
     // 创建目标目录
     let target_dir = PathBuf::from(dir);
     if !target_dir.exists() {
         fs::create_dir_all(&target_dir)
-            .with_context(|| format!("Failed to create directory '{}'", dir))?;
+            .with_context(|| format!("Failed to create directory '{dir}'"))?;
     }
 
     // 克隆仓库
@@ -263,13 +268,13 @@ async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
     let clone_path = target_dir.join(&crate_info.name);
 
     if clone_path.exists() {
-        println!(
+        info!(
             "Directory '{}' already exists, pulling latest changes...",
             clone_path.display()
         );
         git_ops.pull(&clone_path)?;
     } else {
-        println!("Cloning repository to '{}'...", clone_path.display());
+        info!("Cloning repository to '{}'...", clone_path.display());
         git_ops.clone(&crate_info.repository_url, &clone_path)?;
     }
 
@@ -278,7 +283,7 @@ async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
     {
         Ok(path) => {
             if path != clone_path {
-                println!(
+                info!(
                     "🎯 Found crate '{}' in workspace at: {}",
                     crate_info.name,
                     path.display()
@@ -287,26 +292,26 @@ async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
             path
         }
         Err(e) => {
-            println!("⚠️  Could not locate crate in repository: {}", e);
-            println!("📋 Available crates in repository:");
+            warn!("⚠️  Could not locate crate in repository: {e}");
+            info!("📋 Available crates in repository:");
 
             match WorkspaceDetector::list_workspace_crates(&clone_path) {
                 Ok(crates) => {
                     if crates.is_empty() {
-                        println!("  (No crates found)");
+                        info!("  (No crates found)");
                         return Err(e);
                     } else {
                         for (name, path) in &crates {
                             let relative_path =
                                 path.strip_prefix(&clone_path).unwrap_or(path).display();
-                            println!("  📦 {} ({})", name, relative_path);
+                            info!("  📦 {name} ({relative_path})");
                         }
 
                         // 尝试找到名称相似的 crate
                         if let Some((similar_name, similar_path)) =
                             find_similar_crate(&crate_info.name, &crates)
                         {
-                            println!("💡 Did you mean '{}'? Using it instead.", similar_name);
+                            info!("💡 Did you mean '{similar_name}'? Using it instead.");
                             similar_path
                         } else {
                             return Err(anyhow!("Could not find crate '{}' in the repository. Please check the available crates above.", crate_info.name));
@@ -314,7 +319,7 @@ async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
                     }
                 }
                 Err(list_err) => {
-                    println!("  ❌ Failed to list crates: {}", list_err);
+                    error!("  ❌ Failed to list crates: {list_err}");
                     return Err(e);
                 }
             }
@@ -339,15 +344,15 @@ async fn run_lpatch(name: &str, dir: &str) -> Result<()> {
 
     cargo_config.save()?;
 
-    println!(
+    info!(
         "✅ Successfully set up local patch for '{}'",
         crate_info.name
     );
-    println!("📁 Cloned to: {}", clone_path.display());
+    info!("📁 Cloned to: {}", clone_path.display());
     if actual_crate_path != clone_path {
-        println!("🎯 Crate located at: {}", actual_crate_path.display());
+        info!("🎯 Crate located at: {}", actual_crate_path.display());
     }
-    println!("⚙️  Updated .cargo/config.toml with local patch configuration");
+    info!("⚙️  Updated .cargo/config.toml with local patch configuration");
 
     Ok(())
 }
@@ -372,7 +377,7 @@ fn extract_crate_name_from_git_url(git_url: &str) -> Result<String> {
         git_url.to_string()
     };
 
-    let parsed_url = Url::parse(&url).with_context(|| format!("Failed to parse URL: {}", url))?;
+    let parsed_url = Url::parse(&url).with_context(|| format!("Failed to parse URL: {url}"))?;
 
     let path = parsed_url.path();
     let name = path

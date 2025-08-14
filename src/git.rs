@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use git2::build::{CheckoutBuilder, RepoBuilder};
 use git2::{Cred, CredentialType, FetchOptions, RemoteCallbacks, Repository};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use log::{debug, info, warn};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -25,19 +27,19 @@ impl GitOperations {
         if let Ok(config) = git2::Config::open_default() {
             if let Ok(name) = config.get_string("user.name") {
                 s.username = name;
-                println!("👤 Git username: {}", s.username);
+                debug!("👤 Git username: {}", s.username);
             }
 
             if let Ok(helper) = config.get_string("credential.helper") {
-                println!("  🔑 Credential helper: {helper}");
+                debug!("  🔑 Credential helper: {helper}");
                 s.credential_helper = Some(helper);
             }
             if let Ok(ssl_verify) = config.get_bool("http.sslverify") {
                 s.http_sslverify = ssl_verify;
-                println!("  🔒 SSL verify: {ssl_verify}");
+                debug!("  🔒 SSL verify: {ssl_verify}");
             }
         } else {
-            println!("⚠️  No global Git configuration found, using defaults");
+            warn!("⚠️  No global Git configuration found, using defaults");
         }
         s
     }
@@ -47,17 +49,17 @@ impl GitOperations {
         ssh_agent_tried: Arc<AtomicBool>,
         username: &str,
     ) -> Result<Cred, git2::Error> {
-        println!("🔑 Trying SSH authentication for user: {username}");
+        debug!("🔑 Trying SSH authentication for user: {username}");
 
         if !ssh_agent_tried.load(std::sync::atomic::Ordering::Relaxed) {
             // 1. 首先尝试 SSH Agent 认证（这会使用系统配置的 SSH agent）
             match Cred::ssh_key_from_agent(username) {
                 Ok(cred) => {
-                    println!("✅ Using system SSH agent");
+                    debug!("✅ Using system SSH agent");
                     ssh_agent_tried.store(true, std::sync::atomic::Ordering::Relaxed);
                     return Ok(cred);
                 }
-                Err(_) => println!("⚠️  System SSH agent not available or no keys loaded"),
+                Err(_) => debug!("⚠️  System SSH agent not available or no keys loaded"),
             }
         }
 
@@ -72,27 +74,27 @@ impl GitOperations {
                     None
                 };
 
-                println!("🔑 Trying system SSH key: {}", private_key.display());
+                debug!("🔑 Trying system SSH key: {}", private_key.display());
                 match Cred::ssh_key(username, public_key_path, &private_key, None) {
                     Ok(cred) => {
-                        println!("✅ Using system SSH key: {}", private_key.display());
+                        debug!("✅ Using system SSH key: {}", private_key.display());
                         return Ok(cred);
                     }
                     Err(e) => {
-                        println!("⚠️  System SSH key {} failed: {e}", private_key.display());
+                        debug!("⚠️  System SSH key {} failed: {e}", private_key.display());
                         continue; // 尝试下一个密钥
                     }
                 }
             }
         }
 
-        println!("❌ No valid system SSH key found");
+        error!("❌ No valid system SSH key found");
         Err(git2::Error::from_str("No valid system SSH key found"))
     }
 
     /// 尝试用户名密码认证（优先使用系统 Git 配置）
     fn try_userpass_auth() -> Result<Cred, git2::Error> {
-        println!("🔑 Trying username/password authentication using system configuration");
+        debug!("🔑 Trying username/password authentication using system configuration");
 
         // 1. 优先从系统 Git 配置获取用户信息
         if let Ok(config) = git2::Config::open_default() {
@@ -108,7 +110,7 @@ impl GitOperations {
                     .or_else(|_| env::var("GITHUB_TOKEN"))
                     .or_else(|_| env::var("GIT_PASSWORD"))
                 {
-                    println!("✅ Using username from system Git config and token from environment");
+                    debug!("✅ Using username from system Git config and token from environment");
                     return Cred::userpass_plaintext(&username, &password);
                 }
             }
@@ -116,12 +118,12 @@ impl GitOperations {
 
         // 2. 回退到纯环境变量方式（保持向后兼容）
         if let (Ok(username), Ok(password)) = (env::var("GIT_USERNAME"), env::var("GIT_PASSWORD")) {
-            println!("✅ Using credentials from environment variables");
+            debug!("✅ Using credentials from environment variables");
             return Cred::userpass_plaintext(&username, &password);
         }
 
-        println!("❌ No username/password credentials available from system configuration");
-        println!("💡 Tip: Configure Git credentials using 'git config --global credential.helper' or set environment variables");
+        error!("❌ No username/password credentials available from system configuration");
+        error!("💡 Tip: Configure Git credentials using 'git config --global credential.helper' or set environment variables");
         Err(git2::Error::from_str(
             "No username/password credentials available from system configuration",
         ))
@@ -163,7 +165,7 @@ impl GitOperations {
         let mut callbacks = RemoteCallbacks::new();
         let ssh_agent_tried = Arc::clone(&self.ssh_agent_tried);
         callbacks.credentials(move |url, username_from_url, allowed_types| {
-            println!("🔑 Authenticating for URL: {url}, allowed_types: {allowed_types:?}");
+            debug!("🔑 Authenticating for URL: {url}, allowed_types: {allowed_types:?}");
             if allowed_types.contains(CredentialType::SSH_KEY) {
                 return Self::try_ssh_key_auth(
                     ssh_agent_tried.clone(),
@@ -185,31 +187,87 @@ impl GitOperations {
     }
 
     pub fn clone(&self, url: &str, target_path: &Path) -> Result<()> {
-        println!("🔄 Cloning {} to {}...", url, target_path.display());
+        info!("🔄 Cloning {} to {}...", url, target_path.display());
+        let multi_pb = MultiProgress::new();
+        // 创建传输进度条
+        let transfer_pb = multi_pb.add(ProgressBar::new(100));
+        transfer_pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos:>7}/{len:7} objects ({msg})")
+                .unwrap()
+                .progress_chars("=>-")
+        );
+        transfer_pb.set_message("Downloading");
+
+        // 创建解压进度条
+        let resolving_pb = multi_pb.add(ProgressBar::new(100));
+        resolving_pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.yellow/red}] {pos:>7}/{len:7} deltas ({msg})")
+                .unwrap()
+                .progress_chars("=>-")
+        );
+        resolving_pb.set_message("Resolving");
+
+        // 创建检出进度条
+        let checkout_pb = multi_pb.add(ProgressBar::new(100));
+        checkout_pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.magenta/blue}] {pos:>7}/{len:7} files ({msg})")
+                .unwrap()
+                .progress_chars("=>-")
+        );
+        checkout_pb.set_message("Checking out");
+
         let mut cb = self.remote_callbacks();
 
-        cb.transfer_progress(|stats| {
-            if stats.received_objects() == stats.total_objects() {
-                print!(
-                    "Resolving deltas {}/{}\r",
-                    stats.indexed_deltas(),
-                    stats.total_deltas()
-                );
-            } else if stats.total_objects() > 0 {
-                print!(
-                    "Received {}/{} objects ({}) in {} bytes\r",
-                    stats.received_objects(),
-                    stats.total_objects(),
-                    stats.indexed_objects(),
-                    stats.received_bytes()
-                );
+        // 改进的传输进度回调
+        let transfer_pb_clone = transfer_pb.clone();
+        let resolving_pb_clone = resolving_pb.clone();
+        cb.transfer_progress(move |stats| {
+            if stats.total_objects() == 0 || stats.received_objects() == stats.total_objects() {
+                transfer_pb_clone.finish_with_message("✅ Download complete");
+            } else if stats.received_objects() > 0 {
+                // 显示传输进度
+                transfer_pb_clone.set_length(stats.total_objects() as u64);
+                transfer_pb_clone.set_position(stats.received_objects() as u64);
+
+                let bytes_msg = if stats.received_bytes() > 1024 * 1024 {
+                    format!("{:.1} MB", stats.received_bytes() as f64 / 1024.0 / 1024.0)
+                } else if stats.received_bytes() > 1024 {
+                    format!("{:.1} KB", stats.received_bytes() as f64 / 1024.0)
+                } else {
+                    format!("{} bytes", stats.received_bytes())
+                };
+                transfer_pb_clone.set_message(format!("Downloading ({bytes_msg})"));
             }
-            std::io::Write::flush(&mut std::io::stdout()).unwrap();
+
+            if stats.total_deltas() == 0 || stats.indexed_deltas() == stats.total_deltas() {
+                resolving_pb_clone.finish_with_message("✅ Resolution complete");
+            } else if stats.indexed_deltas() > 0 {
+                // 显示解压进度
+                resolving_pb_clone.set_length(stats.total_deltas() as u64);
+                resolving_pb_clone.set_position(stats.indexed_deltas() as u64);
+                let p = stats.indexed_deltas() as f64 / stats.total_deltas() as f64 * 100.0;
+                resolving_pb_clone.set_message(format!("Resolving ({p:.1}%)"));
+            }
+
             true
         });
 
+        // 改进的检出进度回调
         let mut co = CheckoutBuilder::new();
-        co.progress(|path, cur, total| {});
+        let checkout_pb_clone = checkout_pb.clone();
+        co.progress(move |_path, cur, total| {
+            if total > 0 {
+                checkout_pb_clone.set_length(total as u64);
+                checkout_pb_clone.set_position(cur as u64);
+
+                if cur == total {
+                    checkout_pb_clone.finish_with_message("Checkout complete");
+                }
+            }
+        });
 
         let mut fo = FetchOptions::new();
         fo.remote_callbacks(cb);
@@ -219,10 +277,20 @@ impl GitOperations {
 
         match builder.clone(url, target_path) {
             Ok(_) => {
-                println!("\n✅ Clone completed successfully");
+                // 确保所有进度条都完成
+                transfer_pb.finish_with_message("✅ Download complete");
+                resolving_pb.finish_with_message("✅ Resolution complete");
+                checkout_pb.finish_with_message("✅ Checkout complete");
+                info!("✅ Clone completed successfully");
+                multi_pb.clear().unwrap();
                 Ok(())
             }
             Err(e) => {
+                // 清理进度条
+                transfer_pb.abandon_with_message("❌ Download failed");
+                resolving_pb.abandon_with_message("❌ Resolution failed");
+                checkout_pb.abandon_with_message("❌ Checkout failed");
+
                 // 提供更友好的错误信息和解决方案
                 let error_msg = match e.code() {
                     git2::ErrorCode::Certificate => {
@@ -257,13 +325,14 @@ impl GitOperations {
                     }
                     _ => format!("Git clone failed for {url}: {e}"),
                 };
+                multi_pb.clear().unwrap();
                 Err(anyhow::anyhow!(error_msg))
             }
         }
     }
 
     pub fn pull(&self, repo_path: &Path) -> Result<()> {
-        println!("🔄 Pulling latest changes in {}...", repo_path.display());
+        info!("🔄 Pulling latest changes in {}...", repo_path.display());
 
         let repo = Repository::open(repo_path)
             .with_context(|| format!("Failed to open repository at {}", repo_path.display()))?;
@@ -279,21 +348,34 @@ impl GitOperations {
 
         // 设置回调
         let mut callbacks = self.remote_callbacks();
-        callbacks.transfer_progress(|stats| {
-            if stats.received_objects() == stats.total_objects() {
-                print!(
-                    "Resolving deltas {}/{}\r",
-                    stats.indexed_deltas(),
-                    stats.total_deltas()
-                );
+
+        // 创建拉取进度条
+        let pull_pb = ProgressBar::new(100);
+        pull_pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos:>7}/{len:7} objects ({msg})")
+                .unwrap()
+                .progress_chars("=>-")
+        );
+        pull_pb.set_message("Fetching updates");
+
+        let pull_pb_clone = pull_pb.clone();
+        callbacks.transfer_progress(move |stats| {
+            if stats.received_objects() == stats.total_objects() && stats.total_objects() > 0 {
+                pull_pb_clone.finish_with_message("✅ Fetch complete");
             } else if stats.total_objects() > 0 {
-                print!(
-                    "Received {}/{} objects\r",
-                    stats.received_objects(),
-                    stats.total_objects()
-                );
+                pull_pb_clone.set_length(stats.total_objects() as u64);
+                pull_pb_clone.set_position(stats.received_objects() as u64);
+
+                let bytes_msg = if stats.received_bytes() > 1024 * 1024 {
+                    format!("{:.1} MB", stats.received_bytes() as f64 / 1024.0 / 1024.0)
+                } else if stats.received_bytes() > 1024 {
+                    format!("{:.1} KB", stats.received_bytes() as f64 / 1024.0)
+                } else {
+                    format!("{} bytes", stats.received_bytes())
+                };
+                pull_pb_clone.set_message(format!("Fetching ({bytes_msg})"));
             }
-            std::io::Write::flush(&mut std::io::stdout()).unwrap();
             true
         });
 
@@ -301,27 +383,37 @@ impl GitOperations {
         fetch_options.remote_callbacks(callbacks);
 
         // 获取远程更新
-        remote
-            .fetch(&[branch_name], Some(&mut fetch_options), None)
-            .context("Failed to fetch from remote")?;
+        let fetch_result = remote.fetch(&[branch_name], Some(&mut fetch_options), None);
 
-        // 获取远程分支的 OID
-        let fetch_head = repo.fetchhead_foreach(|ref_name, remote_url, _oid, is_merge| {
-            let remote_url_str = String::from_utf8_lossy(remote_url);
-            println!("Fetched {ref_name} from {remote_url_str}");
-            if is_merge {
-                // 这里可以进行合并操作，但为了简单起见，我们只提示用户
-                println!(
-                    "Note: You may need to manually merge changes in {}",
-                    repo_path.display()
-                );
+        match fetch_result {
+            Ok(_) => {
+                pull_pb.finish_with_message("✅ Fetch complete");
+
+                // 获取远程分支的 OID
+                let fetch_head = repo.fetchhead_foreach(|ref_name, remote_url, _oid, is_merge| {
+                    let remote_url_str = String::from_utf8_lossy(remote_url);
+                    info!("📥 Fetched {ref_name} from {remote_url_str}");
+                    if is_merge {
+                        // 这里可以进行合并操作，但为了简单起见，我们只提示用户
+                        info!(
+                            "💡 Note: You may need to manually merge changes in {}",
+                            repo_path.display()
+                        );
+                    }
+                    true
+                });
+
+                match fetch_head {
+                    Ok(_) => info!("✅ Pull completed successfully"),
+                    Err(_) => {
+                        info!("⚠️  Fetch completed, but you may need to manually merge changes")
+                    }
+                }
             }
-            true
-        });
-
-        match fetch_head {
-            Ok(_) => println!("✅ Pull completed successfully"),
-            Err(_) => println!("⚠️  Fetch completed, but you may need to manually merge changes"),
+            Err(e) => {
+                pull_pb.abandon_with_message("❌ Fetch failed");
+                return Err(anyhow::anyhow!("Failed to fetch from remote: {}", e));
+            }
         }
 
         Ok(())

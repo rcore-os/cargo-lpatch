@@ -62,7 +62,7 @@ pub struct CargoToml {
     #[serde(rename = "build-dependencies", skip_serializing_if = "Option::is_none")]
     pub build_dependencies: Option<HashMap<String, DependencyDefinition>>,
     #[serde(flatten)]
-    pub other: HashMap<String, toml::Value>,
+    pub _other: HashMap<String, toml::Value>,
 }
 
 impl CargoToml {
@@ -141,7 +141,7 @@ impl CargoToml {
             .filter_map(|(name, def)| {
                 self.parse_dependency_definition(name, def)
                     .map_err(|e| {
-                        eprintln!("⚠️  Failed to parse dependency '{}': {}", name, e);
+                        error!("⚠️  Failed to parse dependency '{name}': {e}");
                         e
                     })
                     .ok()
@@ -229,26 +229,26 @@ impl CargoToml {
 }
 
 impl DependencyInfo {
-    /// 获取依赖的仓库 URL（如果是 git 依赖）
-    pub fn get_git_url(&self) -> Option<&str> {
-        match &self.dep_type {
-            DependencyType::Git { git, .. } => Some(git),
-            _ => None,
-        }
-    }
+    // /// 获取依赖的仓库 URL（如果是 git 依赖）
+    // pub fn get_git_url(&self) -> Option<&str> {
+    //     match &self.dep_type {
+    //         DependencyType::Git { git, .. } => Some(git),
+    //         _ => None,
+    //     }
+    // }
 
-    /// 检查是否是 git 依赖
-    pub fn is_git_dependency(&self) -> bool {
-        matches!(self.dep_type, DependencyType::Git { .. })
-    }
+    // /// 检查是否是 git 依赖
+    // pub fn is_git_dependency(&self) -> bool {
+    //     matches!(self.dep_type, DependencyType::Git { .. })
+    // }
 
-    /// 检查是否是版本依赖（来自 crates.io）
-    pub fn is_version_dependency(&self) -> bool {
-        matches!(self.dep_type, DependencyType::Version { .. })
-    }
+    // /// 检查是否是版本依赖（来自 crates.io）
+    // pub fn is_version_dependency(&self) -> bool {
+    //     matches!(self.dep_type, DependencyType::Version { .. })
+    // }
 
-    /// 检查是否是路径依赖
-    pub fn is_path_dependency(&self) -> bool {
-        matches!(self.dep_type, DependencyType::Path { .. })
-    }
+    // /// 检查是否是路径依赖
+    // pub fn is_path_dependency(&self) -> bool {
+    //     matches!(self.dep_type, DependencyType::Path { .. })
+    // }
 }

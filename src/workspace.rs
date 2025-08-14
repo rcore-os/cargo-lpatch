@@ -9,16 +9,16 @@ pub struct WorkspaceConfig {
     pub members: Option<Vec<String>>,
     pub exclude: Option<Vec<String>>,
     #[serde(flatten)]
-    pub other: std::collections::HashMap<String, toml::Value>,
+    pub _other: std::collections::HashMap<String, toml::Value>,
 }
 
 /// 根 Cargo.toml 结构（用于检测 workspace）
 #[derive(Debug, Deserialize)]
 pub struct RootCargoToml {
     pub workspace: Option<WorkspaceConfig>,
-    pub package: Option<toml::Value>,
+    pub _package: Option<toml::Value>,
     #[serde(flatten)]
-    pub other: std::collections::HashMap<String, toml::Value>,
+    pub _other: std::collections::HashMap<String, toml::Value>,
 }
 
 /// 包配置结构
@@ -26,7 +26,7 @@ pub struct RootCargoToml {
 pub struct PackageConfig {
     pub name: String,
     #[serde(flatten)]
-    pub other: std::collections::HashMap<String, toml::Value>,
+    pub _other: std::collections::HashMap<String, toml::Value>,
 }
 
 /// 包 Cargo.toml 结构（用于获取包名）
@@ -34,7 +34,7 @@ pub struct PackageConfig {
 pub struct PackageCargoToml {
     pub package: Option<PackageConfig>,
     #[serde(flatten)]
-    pub other: std::collections::HashMap<String, toml::Value>,
+    pub _other: std::collections::HashMap<String, toml::Value>,
 }
 
 /// Workspace 检测和处理工具
@@ -57,12 +57,12 @@ impl WorkspaceDetector {
 
         // 检查是否是 workspace
         if let Some(workspace) = root_config.workspace {
-            println!("🏗️  Detected workspace structure");
+            info!("🏗️  Detected workspace structure");
             Self::find_crate_in_workspace(repo_path, crate_name, &workspace)
         } else {
             // 不是 workspace，检查是否是目标 crate
             if Self::is_target_crate(repo_path, crate_name)? {
-                println!("📦 Single crate repository matches target '{}'", crate_name);
+                info!("📦 Single crate repository matches target '{crate_name}'");
                 Ok(repo_path.to_path_buf())
             } else {
                 Err(anyhow!(
@@ -83,9 +83,9 @@ impl WorkspaceDetector {
         let members = workspace.members.as_ref().unwrap_or(&empty_vec);
         let exclude = workspace.exclude.as_ref().unwrap_or(&empty_vec);
 
-        println!("  📂 Workspace members: {:?}", members);
+        info!("  📂 Workspace members: {members:?}");
         if !exclude.is_empty() {
-            println!("  🚫 Excluded: {:?}", exclude);
+            info!("  🚫 Excluded: {exclude:?}");
         }
 
         // 收集所有潜在的 crate 路径
@@ -105,7 +105,7 @@ impl WorkspaceDetector {
         // 在候选路径中查找目标 crate
         for candidate_path in candidate_paths {
             if Self::is_target_crate(&candidate_path, crate_name)? {
-                println!(
+                info!(
                     "  ✅ Found crate '{}' at: {}",
                     crate_name,
                     candidate_path.display()

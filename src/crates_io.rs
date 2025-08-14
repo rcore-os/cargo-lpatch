@@ -29,7 +29,7 @@ impl CratesIoClient {
     pub async fn get_repository_url(&self, crate_name: &str) -> Result<String> {
         let url = format!("{}/crates/{}", self.base_url, crate_name);
 
-        println!("Querying crates.io for crate: {}", crate_name);
+        info!("Querying crates.io for crate: {crate_name}");
 
         let response = self
             .client
