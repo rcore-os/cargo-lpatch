@@ -52,6 +52,10 @@ impl CargoConfig {
     }
 
     pub fn add_patch(&mut self, crate_name: &str, local_path: &Path) -> Result<()> {
+        self.add_patch_with_source(crate_name, local_path, "crates-io")
+    }
+
+    pub fn add_patch_with_source(&mut self, crate_name: &str, local_path: &Path, patch_source: &str) -> Result<()> {
         // 确保 patch 表存在
         if self.patch.is_none() {
             self.patch = Some(HashMap::new());
@@ -59,12 +63,12 @@ impl CargoConfig {
         
         let patch_table = self.patch.as_mut().unwrap();
         
-        // 确保 crates-io 表存在
-        if !patch_table.contains_key("crates-io") {
-            patch_table.insert("crates-io".to_string(), HashMap::new());
+        // 确保指定的 patch 源表存在
+        if !patch_table.contains_key(patch_source) {
+            patch_table.insert(patch_source.to_string(), HashMap::new());
         }
         
-        let crates_io_patches = patch_table.get_mut("crates-io").unwrap();
+        let source_patches = patch_table.get_mut(patch_source).unwrap();
         
         // 将路径转换为相对路径（相对于当前工作目录）
         let current_dir = std::env::current_dir()
@@ -82,11 +86,11 @@ impl CargoConfig {
         let path_str = relative_path.to_string_lossy().to_string();
         
         // 添加或更新 patch 配置
-        crates_io_patches.insert(crate_name.to_string(), PatchConfig {
+        source_patches.insert(crate_name.to_string(), PatchConfig {
             path: path_str,
         });
         
-        println!("➕ Added patch for '{}' -> '{}'", crate_name, relative_path.display());
+        println!("➕ Added patch for '{}' -> '{}' (source: {})", crate_name, relative_path.display(), patch_source);
         
         Ok(())
     }
