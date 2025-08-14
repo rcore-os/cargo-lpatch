@@ -1,0 +1,28 @@
+[package]
+categories = ["development-tools::cargo-plugins"]
+description = "A cargo plugin to locally patch dependencies by cloning them and setting up local patches"
+edition = "2021"
+keywords = ["cargo", "patch", "dependency", "local"]
+license = "MIT OR Apache-2.0"
+name = "cargo-lpatch"
+repository = "https://github.com/rcore-os/cargo-lpatch"
+version = "0.1.0"
+
+[[bin]]
+name = "cargo-lpatch"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = {version = "4.0", features = ["derive"]}
+dirs = "5.0"
+git2 = "0.18"
+reqwest = {version = "0.11", features = ["json"]}
+serde = {version = "1.0", features = ["derive"]}
+serde_json = "1.0"
+tokio = {version = "1.0", features = ["full"]}
+toml = "0.8"
+url = "2.0"
+
+[dev-dependencies]
+tempfile = "3.0"
